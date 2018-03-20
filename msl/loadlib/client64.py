@@ -152,7 +152,10 @@ class Client64(HTTPConnection):
             cmd.append('--quiet')
 
         # start the server, cannot use subprocess.call() because it blocks
-        subprocess.Popen(cmd, stderr=sys.stderr, stdout=sys.stderr)
+        try:
+            subprocess.Popen(cmd, stderr=sys.stderr, stdout=sys.stderr)
+        except FileNotFoundError as e:
+           raise FileNotFoundError('%s %s %s' % (e.filename, e.args, e.errno))
         utils.wait_for_server(host, port, timeout)
 
         # start the connection
