@@ -152,7 +152,6 @@ class Client64(HTTPConnection):
             cmd.append('--quiet')
 
         # start the server, cannot use subprocess.call() because it blocks
-        print(cmd)
         subprocess.Popen(cmd, stderr=sys.stderr, stdout=sys.stderr)
         utils.wait_for_server(host, port, timeout)
 
