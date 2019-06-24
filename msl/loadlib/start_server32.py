@@ -10,6 +10,7 @@ form of `inter-process communication <ipc_>`_.
 """
 from __future__ import print_function
 
+import io
 import os
 import sys
 import code
@@ -17,7 +18,7 @@ import inspect
 import argparse
 import importlib
 
-from msl.loadlib import Server32
+from msl.loadlib import Server32, SERVER_FILENAME
 
 
 def main():
@@ -26,9 +27,9 @@ def main():
     Parses the command-line arguments to run a Python module on a 32-bit server
     to host a 32-bit library. To see the list of command-line arguments that are 
     allowed, run the executable with the ``--help`` flag (or click here_ to view
-    the source code of the :obj:`argparse.ArgumentParser` implementation).
+    the source code of the :class:`argparse.ArgumentParser` implementation).
 
-    .. _here: http://msl-loadlib.readthedocs.io/en/latest/_modules/msl/loadlib/start_server32.html#main
+    .. _here: https://msl-loadlib.readthedocs.io/en/latest/_modules/msl/loadlib/start_server32.html#main
     """
     parser = argparse.ArgumentParser(
         description='Starts a 32-bit Python interpreter which allows for inter-process communication'
@@ -41,17 +42,17 @@ def main():
                              'server (the module must contain a class that is a '
                              'subclass of msl.loadlib.Server32)')
 
-    parser.add_argument('-asp', '--append-sys-path', default=None,
+    parser.add_argument('-s', '--append-sys-path', default=None,
                         help=r'append path(s) to the sys.path variable on the 32-bit '
-                             r'server, e.g., -asp D:\path\to\my_scripts, or for '
+                             r'server, e.g., -s D:\path\to\my_scripts, or for '
                              r'multiple paths separate each path by a semi-colon, '
-                             r'e.g., -asp D:\path\to\my_scripts;D:\lib')
+                             r'e.g., -s D:\path\to\my_scripts;D:\lib')
 
-    parser.add_argument('-aep', '--append-environ-path', default=None,
+    parser.add_argument('-e', '--append-environ-path', default=None,
                         help=r"append path(s) to the os.environ['PATH'] variable on "
-                             r"the 32-bit server, e.g., -aep D:\code\bin, or for "
+                             r"the 32-bit server, e.g., -e D:\code\bin, or for "
                              r"multiple paths separate each path by a semi-colon, "
-                             r"e.g., -aep D:\code\bin;D:\lib")
+                             r"e.g., -e D:\code\bin;D:\lib")
 
     parser.add_argument('-H', '--host', default='127.0.0.1',
                         help='the IP address of the host [default: 127.0.0.1]')
@@ -60,7 +61,7 @@ def main():
                         help='the port to open on the host [default: 8080]')
 
     parser.add_argument('-q', '--quiet', action='store_true',
-                        help='whether to hide sys.stdout messages from the server '
+                        help='whether to hide sys.stdout messages on the server '
                              '[default: False]')
 
     parser.add_argument('-v', '--version', action='store_true',
@@ -79,7 +80,7 @@ def main():
 
     if args.version:
         print('Python ' + sys.version)
-        sys.exit(0)
+        return 0
 
     # include directories in sys.path
     sys.path.append(os.path.abspath('.'))
@@ -87,13 +88,13 @@ def main():
         sys.path.append(os.path.dirname(args.module))
     if args.append_sys_path is not None:
         for path in args.append_sys_path.split(';'):
-            if len(path) > 0:
+            if path:
                 sys.path.append(os.path.abspath(path))
 
     # include directories in os.environ['PATH']
     if args.append_environ_path is not None:
         for path in args.append_environ_path.split(';'):
-            if len(path) > 0:
+            if path:
                 os.environ['PATH'] += os.pathsep + os.path.abspath(path)
 
     if args.interactive:
@@ -102,7 +103,7 @@ def main():
         banner = 'Python ' + sys.version
         banner += '\nType exit() or quit() or <CTRL+Z then Enter> to terminate the console.'
         console.interact(banner=banner)
-        sys.exit(0)
+        return 0
 
     # build the keyword-argument dictionary
     kwargs = {}
@@ -120,31 +121,35 @@ def main():
 
     # if you get to this point in the script that means you want to start a server for
     # inter-process communication and therefore args.module must have a value
-    if args.module is None:
-        print('You must specify a Python module to run on the 32-bit server (i.e., -m my_module)')
-        print('Cannot start 32-bit server.\n')
-        sys.exit(0)
+    if not args.module:
+        err = 'You must specify a Python module to run on the 32-bit server.\n' \
+              'For example: {} -m my_module.py\n' \
+              'Cannot start the 32-bit server.\n'.format(SERVER_FILENAME)
+        print(err, file=sys.stderr)
+        return -1
 
     args.module = os.path.basename(args.module)
     if args.module.endswith('.py'):
         args.module = args.module[:-3]
 
     if args.module.startswith('.'):
-        print('ImportError: ' + args.module)
-        print('Cannot perform relative imports.')
-        print('Cannot start 32-bit server.\n')
-        sys.exit(0)
+        err = 'ImportError: {}\n' \
+              'Cannot perform relative imports.\n' \
+              'Cannot start the 32-bit server.\n'.format(args.module)
+        print(err, file=sys.stderr)
+        return -1
 
     try:
         mod = importlib.import_module(args.module)
     except ImportError as e:
-        print('ImportError: {}'.format(e))
-        print('The missing module must be in sys.path (see the --append-sys-path argument)')
-        print('The paths in sys.path are:')
-        for path in sys.path[2:]:  # the first two paths are TEMP folders from the frozen application
-            print('\t' + path)
-        print('Cannot start 32-bit server.\n')
-        sys.exit(0)
+        # the first two paths are TEMP folders from the frozen application
+        paths = '\n  '.join(item for item in sys.path[2:])
+        err = 'ImportError: {}\n' \
+              'The missing module must be in sys.path (see the --append-sys-path option)\n' \
+              'The paths in sys.path are:\n  {}\n' \
+              'Cannot start the 32-bit server.\n'.format(e, paths)
+        print(err, file=sys.stderr)
+        return -1
 
     # ensure that there is a subclass of Server32 in the module
     server32 = None
@@ -155,34 +160,55 @@ def main():
             break
 
     if server32 is None:
-        print('AttributeError: module {}.py'.format(args.module))
-        print('Module does not contain a class that is a subclass of Server32')
-        print('Cannot start 32-bit server.\n')
-        sys.exit(0)
+        err = 'AttributeError: module {}.py\n' \
+              'Module does not contain a class that is a subclass of Server32.\n' \
+              'Cannot start the 32-bit server.\n'.format(args.module)
+        print(err, file=sys.stderr)
+        return -1
+
+    if args.quiet:
+        sys.stdout = io.StringIO()
 
     try:
         app = server32(args.host, args.port, args.quiet, **kwargs)
-    except TypeError as e:
-        print('TypeError: {}'.format(e))
-        print('The Server32 subclass must be initialized using\n')
-        print('class {}(Server32):'.format(server32.__name__))
-        print('    def __init__(self, host, port, quiet, **kwargs):\n')
-        print('Cannot start 32-bit server.\n')
-        sys.exit(0)
+    except Exception as e:
+        err = '{}: {}\n'.format(e.__class__.__name__, e)
+        if e.__class__.__name__ == 'TypeError' and '__init__' in str(e):
+            err += 'The \'{0}\' class must be defined with the following syntax:\n\n' \
+                   'class {0}(Server32):\n' \
+                   '    def __init__(self, host, port, quiet, **kwargs):\n' \
+                   '        super({0}, self).__init__(path, libtype, host, port, quiet, **kwargs)\n\n'\
+                .format(server32.__name__)
+        err += 'Cannot start the 32-bit server.\n'
+        print(err, file=sys.stderr)
+        return -1
 
-    if not args.quiet:
-        print('Python ' + sys.version)
-        print('Serving {} on http://{}:{}'.format(os.path.basename(app.path), args.host, args.port))
+    if not hasattr(app, '_library'):
+        err = 'The super() method was never called.\n' \
+              'The \'{0}\' class must be defined with the following syntax:\n\n' \
+              'class {0}(Server32):\n' \
+              '    def __init__(self, host, port, quiet, **kwargs):\n' \
+              '        super({0}, self).__init__(path, libtype, host, port, quiet, **kwargs)\n\n' \
+              'Cannot start the 32-bit server.\n'.format(server32.__name__)
+        print(err, file=sys.stderr)
+        return -1
+
+    print('Python ' + sys.version)
+    print('Serving {!r} on http://{}:{}'.format(os.path.basename(app.path), args.host, args.port))
 
     try:
         app.serve_forever()
     except KeyboardInterrupt:
-        if not args.quiet:
-            print('KeyboardInterrupt', end=' -- ')
+        print('KeyboardInterrupt', end=' -- ')
+    except Exception as e:
+        # only get here if there is an exception in serve_forever()
+        # error handling for a request is performed by the RequestHandler class
+        print('{}: {}'.format(e.__class__.__name__, e), file=sys.stderr)
     finally:
-        if not args.quiet:
-            print('Stopped http://{}:{}'.format(args.host, args.port))
+        app.server_close()
+        print('Stopped http://{}:{}'.format(args.host, args.port))
+        return 0
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())

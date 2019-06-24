@@ -1,6 +1,6 @@
 """
 A wrapper around the 32-bit Windows `kernel32.dll
-<http://www.geoffchappell.com/studies/windows/win32/kernel32/api/>`_ library.
+<https://www.geoffchappell.com/studies/windows/win32/kernel32/api/>`_ library.
 
 Example of a server that loads a 32-bit Windows library, `kernel32.dll <kernel_>`_,
 in a 32-bit Python interpreter to host the library. The corresponding :mod:`~.kernel64`
@@ -16,7 +16,7 @@ is the 64-bit client for `inter-process communication <ipc_>`_.
    this example is only valid on a Windows computer.
 
 .. _ipc: https://en.wikipedia.org/wiki/Inter-process_communication
-.. _kernel: http://www.geoffchappell.com/studies/windows/win32/kernel32/api/
+.. _kernel: https://www.geoffchappell.com/studies/windows/win32/kernel32/api/
 """
 import ctypes
 import datetime
@@ -27,16 +27,16 @@ from msl.loadlib import Server32
 class Kernel32(Server32):
     """
     Example of a class that is a wrapper around the Windows 32-bit `kernel32.dll
-    <http://www.geoffchappell.com/studies/windows/win32/kernel32/api/>`_ library.
+    <https://www.geoffchappell.com/studies/windows/win32/kernel32/api/>`_ library.
 
     Parameters
     ----------
-    host : :obj:`str`
+    host : :class:`str`
         The IP address of the server.
-    port : :obj:`int`
+    port : :class:`int`
         The port to open on the server.
-    quiet : :obj:`bool`
-        Whether to hide :obj:`sys.stdout` messages from the server.
+    quiet : :class:`bool`
+        Whether to hide :data:`sys.stdout` messages from the server.
 
     Note
     ----
@@ -47,7 +47,7 @@ class Kernel32(Server32):
     :class:`~msl.loadlib.server32.Server32` subclass.
     """
     def __init__(self, host, port, quiet, **kwargs):
-        Server32.__init__(self, 'C:/Windows/SysWOW64/kernel32.dll', 'windll', host, port, quiet)
+        super(Kernel32, self).__init__('C:/Windows/SysWOW64/kernel32.dll', 'windll', host, port, quiet)
 
     def get_time(self):
         """
@@ -77,6 +77,7 @@ class SystemTime(ctypes.Structure):
     .. _SYSTEMTIME: https://msdn.microsoft.com/en-us/library/windows/desktop/ms724950(v=vs.85).aspx
     """
     WORD = ctypes.c_uint16
+
     _fields_ = [('wYear', WORD),
                 ('wMonth', WORD),
                 ('wDayOfWeek', WORD),

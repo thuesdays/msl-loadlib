@@ -15,6 +15,7 @@ is the 32-bit server for `inter-process communication <ipc_>`_.
 import os
 
 from msl.loadlib import Client64
+from msl.examples.loadlib.cpp32 import FourPoints
 
 
 class Cpp64(Client64):
@@ -26,7 +27,7 @@ class Cpp64(Client64):
     def __init__(self):
         # specify the name of the corresponding 32-bit server module, cpp32, which hosts
         # the 32-bit C++ library -- cpp_lib32.
-        Client64.__init__(self, module32='cpp32', append_sys_path=os.path.dirname(__file__))
+        super(Cpp64, self).__init__(module32='cpp32', append_sys_path=os.path.dirname(__file__))
 
     def add(self, a, b):
         """Add two integers.
@@ -35,14 +36,14 @@ class Cpp64(Client64):
 
         Parameters
         ----------
-        a : :obj:`int`
+        a : :class:`int`
             The first integer.
-        b : :obj:`int`
+        b : :class:`int`
             The second integer.
 
         Returns
         -------
-        :obj:`int`
+        :class:`int`
             The sum of `a` and `b`.
         """
         return self.request32('add', a, b)
@@ -54,14 +55,14 @@ class Cpp64(Client64):
 
         Parameters
         ----------
-        a : :obj:`float`
+        a : :class:`float`
             The first floating-point number.
-        b : :obj:`float`
+        b : :class:`float`
             The second floating-point number.
 
         Returns
         -------
-        :obj:`float`
+        :class:`float`
             The difference between `a` and `b`.
         """
         return self.request32('subtract', a, b)
@@ -73,17 +74,17 @@ class Cpp64(Client64):
 
         Parameters
         ----------
-        a : :obj:`float`
+        a : :class:`float`
             The first floating-point number.
-        b : :obj:`float`
+        b : :class:`float`
             The second floating-point number.
-        do_addition : :obj:`bool`
+        do_addition : :class:`bool`
             Whether to **add** the numbers.
 
         Returns
         -------
-        :obj:`float`
-            Either `a` + `b` if `do_addition` is :obj:`True` else `a` - `b`.
+        :class:`float`
+            Either `a` + `b` if `do_addition` is :data:`True` else `a` - `b`.
         """
         return self.request32('add_or_subtract', a, b, do_addition)
 
@@ -94,14 +95,14 @@ class Cpp64(Client64):
 
         Parameters
         ----------
-        a : :obj:`float`
+        a : :class:`float`
             The scalar value.
-        xin : :obj:`list` of :obj:`float`
+        xin : :class:`list` of :class:`float`
             The array to modify.
 
         Returns
         -------
-        :obj:`list` of :obj:`float`
+        :class:`list` of :class:`float`
             A new array with each element in `xin` multiplied by `a`.
         """
         return self.request32('scalar_multiply', a, xin)
@@ -116,12 +117,12 @@ class Cpp64(Client64):
 
         Parameters
         ----------
-        original : :obj:`str`
+        original : :class:`str`
             The original string.
 
         Returns
         -------
-        :obj:`str`
+        :class:`str`
             The string reversed.
         """
         return self.request32('reverse_string_v1', original)
@@ -136,32 +137,62 @@ class Cpp64(Client64):
 
         Parameters
         ----------
-        original : :obj:`str`
+        original : :class:`str`
             The original string.
 
         Returns
         -------
-        :obj:`str`
+        :class:`str`
             The string reversed.
         """
         return self.request32('reverse_string_v2', original)
 
+    def distance_4_points(self, points):
+        """Calculates the total distance connecting 4 :class:`~msl.examples.loadlib.cpp32.Point`\'s.
 
-if __name__ == '__main__':
-    import re
-    import inspect
+        See the corresponding 32-bit :meth:`~.cpp32.Cpp32.distance_4_points` method.
 
-    def display(value):
-        caller = re.findall(r'cpp.\w+', inspect.stack()[1][4][0])
-        print('{} {} {}'.format(caller[0], type(value), value))
+        .. attention::
+           This method does not work with if :class:`Cpp64` is running in Python 2.
+           You would have to create the :class:`.FourPoints` object in the 32-bit
+           version of :meth:`~.cpp32.Cpp32.distance_4_points` because there are issues
+           using the :mod:`pickle` module between different major version numbers of
+           Python for :mod:`ctypes` objects.
 
-    x, y, = 3, 7
-    cpp = Cpp64()
-    print(cpp.lib32_path)
-    display(cpp.add(x, y))
-    display(cpp.subtract(x, y))
-    display(cpp.add_or_subtract(x, y, True))
-    display(cpp.add_or_subtract(x, y, False))
-    display(cpp.scalar_multiply(2., [float(val) for val in range(10)]))
-    display(cpp.reverse_string_v1('hello world!'))
-    display(cpp.reverse_string_v2('uncertainty'))
+        Parameters
+        ----------
+        points : :class:`.FourPoints`
+            Since `points` is a struct that is a fixed size we can pass the
+            :class:`ctypes.Structure` object directly from 64-bit Python to
+            the 32-bit Python. The :mod:`ctypes` module on the 32-bit server
+            can load the :mod:`pickle`\'d :class:`ctypes.Structure`.
+
+        Returns
+        -------
+        :class:`float`
+            The total distance connecting the 4 :class:`~.Point`\'s.
+        """
+        if not isinstance(points, FourPoints):
+            raise TypeError('Must pass in a FourPoints object. Got {}'.format(type(points)))
+        return self.request32('distance_4_points', points)
+
+    def circumference(self, radius, n):
+        """Estimates the circumference of a circle.
+
+        This method calls the ``distance_n_points`` function in :ref:`cpp_lib32 <cpp-lib>`.
+
+        See the corresponding 32-bit :meth:`~.cpp32.Cpp32.circumference` method.
+
+        Parameters
+        ----------
+        radius : :class:`float`
+            The radius of the circle.
+        n : :class:`int`
+            The number of points to use to estimate the circumference.
+
+        Returns
+        -------
+        :class:`float`
+            The estimated circumference of the circle.
+        """
+        return self.request32('circumference', radius, n)

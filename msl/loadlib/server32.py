@@ -6,31 +6,32 @@ The :class:`~.server32.Server32` class is used in combination with the
 from 64-bit Python.
 """
 import os
+import re
 import sys
+import json
 import traceback
 import threading
 import subprocess
 try:
-    import cPickle as pickle
+    import cPickle as pickle  # Python 2
 except ImportError:
     import pickle
+try:
+    from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler  # Python 2
+except ImportError:
+    from http.server import HTTPServer, BaseHTTPRequestHandler
 
-from msl.loadlib import LoadLibrary
-from msl.loadlib import IS_PYTHON2, IS_PYTHON3, SERVER_FILENAME, IS_WINDOWS
+from . import LoadLibrary, SERVER_FILENAME, IS_WINDOWS
 
-if IS_PYTHON2:
-    from BaseHTTPServer import HTTPServer
-    from BaseHTTPServer import BaseHTTPRequestHandler
-elif IS_PYTHON3:
-    from http.server import HTTPServer
-    from http.server import BaseHTTPRequestHandler
-else:
-    raise NotImplementedError('Python major version is not 2 or 3')
+METADATA = '-METADATA-'
+SHUTDOWN = '-SHUTDOWN-'
+OK = 200
+ERROR = 500
 
 
 class Server32(HTTPServer):
 
-    def __init__(self, path, libtype, host, port, quiet):
+    def __init__(self, path, libtype, host, port, quiet, **kwargs):
         """Base class for loading a 32-bit library in 32-bit Python.
 
         All modules that are to be run on the 32-bit server must contain a class
@@ -54,18 +55,21 @@ class Server32(HTTPServer):
 
                 * ``'cdll'`` -- for a __cdecl library
                 * ``'windll'`` or ``'oledll'`` -- for a __stdcall library (Windows only)
-                * ``'net'`` -- for a .NET library
+                * ``'net'`` or ``'clr'`` -- for Microsoft's .NET Framework (Common Language Runtime)
+                * ``'com'`` -- for a `COM <https://en.wikipedia.org/wiki/Component_Object_Model>`_ library.
 
             .. note::
                Since Java byte code is executed on the JVM_ it does not make sense to
-               use :class:`Serve32` for a Java ``.jar`` or ``.class`` file.
+               use :class:`Server32` for a Java ``.jar`` or ``.class`` file.
 
         host : :class:`str`
             The IP address of the server.
         port : :class:`int`
             The port to open on the server.
         quiet : :class:`bool`
-            Whether to hide :obj:`sys.stdout` messages from the server.
+            Whether to hide :data:`sys.stdout` messages on the server.
+        **kwargs
+            Keyword arguments that are passed to :class:`.LoadLibrary`.
 
         Raises
         ------
@@ -74,15 +78,15 @@ class Server32(HTTPServer):
         TypeError
             If the value of `libtype` is not supported.
         """
-        HTTPServer.__init__(self, (host, int(port)), RequestHandler)
-        self.quiet = quiet
-        self._library = LoadLibrary(path, libtype)
+        self._quiet = bool(quiet)
+        self._library = LoadLibrary(path, libtype=libtype, **kwargs)
+        super(Server32, self).__init__((host, int(port)), _RequestHandler)
 
     @property
     def assembly(self):
         """
         Returns a reference to the `.NET Runtime Assembly <NET_>`_ object, *only if
-        the shared library is a .NET Framework*, otherwise returns :obj:`None`.
+        the shared library is a .NET Framework*, otherwise returns :data:`None`.
 
         .. tip::
            The `JetBrains dotPeek`_ program can be used to reliably decompile any
@@ -95,14 +99,17 @@ class Server32(HTTPServer):
 
     @property
     def lib(self):
-        """Returns the reference to the 32-bit, loaded-library object.
+        """Returns the reference to the 32-bit, loaded library object.
 
         For example, if `libtype` is
 
         * ``'cdll'`` then a :class:`~ctypes.CDLL` object
         * ``'windll'`` then a :class:`~ctypes.WinDLL` object
         * ``'oledll'`` then a :class:`~ctypes.OleDLL` object
-        * ``'net'`` then a :class:`~.load_library.DotNet` object
+        * ``'net'`` or ``'clr'`` then a :class:`~.load_library.DotNet` object
+        * ``'com'`` then the interface pointer returned by comtypes.CreateObject_
+
+        .. _comtypes.CreateObject: https://pythonhosted.org/comtypes/#creating-and-accessing-com-objects
         """
         return self._library.lib
 
@@ -120,15 +127,17 @@ class Server32(HTTPServer):
         :class:`str`
             The result of executing ``'Python ' + sys.version`` on the 32-bit server.
 
-        Example
-        -------
-        >>> from msl.loadlib import Server32  # doctest: +SKIP
-        >>> Server32.version()  # doctest: +SKIP
-        Python 3.6.1 |Continuum Analytics, Inc.| (default, Mar 22 2017, 20:22:29) [MSC v.1900 32 bit (Intel)]       
+        Examples
+        --------
+        ::
+
+            >>> from msl.loadlib import Server32
+            >>> Server32.version()  # doctest: +SKIP
+            'Python 3.7.3 (v3.7.3:ef4ec6ed12, Mar 25 2019, 21:26:53) [MSC v.1916 32 bit (Intel)]'
 
         Note
         ----
-        This method takes about 1 second to finish because the server executable
+        This method takes about 1 second to finish because the 32-bit server
         needs to start in order to determine the version of the Python interpreter.
         """
         exe = os.path.join(os.path.dirname(__file__), SERVER_FILENAME)
@@ -138,14 +147,16 @@ class Server32(HTTPServer):
     @staticmethod
     def interactive_console():
         """Start an interactive console.
-        
-        This method starts an interactive console, in a new terminal, with the 
+
+        This method starts an interactive console, in a new terminal, with the
         Python interpreter on the 32-bit server.
 
-        Example
-        -------
-        >>> from msl.loadlib import Server32  # doctest: +SKIP
-        >>> Server32.interactive_console()  # doctest: +SKIP
+        Examples
+        --------
+        ::
+
+            >>> from msl.loadlib import Server32
+            >>> Server32.interactive_console()  # doctest: +SKIP
         """
         exe = os.path.join(os.path.dirname(__file__), SERVER_FILENAME)
         if IS_WINDOWS:
@@ -154,57 +165,77 @@ class Server32(HTTPServer):
             cmd = "gnome-terminal --command='{exe} --interactive'"
         os.system(cmd.format(exe=exe))
 
+    @property
+    def quiet(self):
+        """:class:`bool`: Whether :data:`sys.stdout` messages are hidden on the server."""
+        return self._quiet
 
-class RequestHandler(BaseHTTPRequestHandler):
-    """
-    Handles the request that was sent to the 32-bit server.
-    """
+    def shutdown_handler(self):
+        """
+        Proxy function that is called immediately prior to the server shutting down.
+
+        The intended use case is for the server to do any necessary cleanup, such as stopping
+        locally started threads, closing file-handles, etc...
+
+        .. versionadded:: 0.6
+        """
+        pass
+
+
+class _RequestHandler(BaseHTTPRequestHandler):
+    """Handles a request that was sent to the 32-bit server."""
 
     def do_GET(self):
-        """
-        Handle a GET request.
-        """
-        request = self.path[1:]
-        if request == 'SHUTDOWN_SERVER32':
-            threading.Thread(target=self.server.shutdown).start()
-            return
-
+        """Handle a GET request."""
         try:
-            method, pickle_protocol, pickle_temp_file = request.split(':', 2)
-            if method == 'LIB32_PATH':
-                response = self.server.path
+            if self.path == METADATA:
+                response = {'path': self.server.path, 'pid': os.getpid()}
             else:
-                with open(pickle_temp_file, 'rb') as f:
+                with open(self.server.pickle_path, 'rb') as f:
                     args = pickle.load(f)
                     kwargs = pickle.load(f)
-                response = getattr(self.server, method)(*args, **kwargs)
+                response = getattr(self.server, self.path)(*args, **kwargs)
 
-            with open(pickle_temp_file, 'wb') as f:
-                pickle.dump(response, f, protocol=int(pickle_protocol))
+            with open(self.server.pickle_path, 'wb') as f:
+                pickle.dump(response, f, protocol=self.server.pickle_protocol)
 
-            self.send_response(200)
+            self.send_response(OK)
             self.end_headers()
 
-        except Exception:
-            self.send_response(501)
-            self.send_header('Content-type', 'text/plain')
-            self.end_headers()
-
+        except Exception as e:
+            print('{}: {}'.format(e.__class__.__name__, e))
             exc_type, exc_value, exc_traceback = sys.exc_info()
             tb_list = traceback.extract_tb(exc_traceback)
             tb = tb_list[min(len(tb_list)-1, 1)]  # get the Server32 subclass exception
-
-            msg = '\n  File "{}", line {}, in {}'.format(tb[0], tb[1], tb[2])
+            response = {'name': exc_type.__name__, 'value': str(exc_value)}
+            traceback_ = '  File {!r}, line {}, in {}'.format(tb[0], tb[1], tb[2])
             if tb[3]:
-                msg += '\n    {}'.format(tb[3])
-            msg += '\n{}: {}'.format(exc_type.__name__, exc_value)
+                traceback_ += '\n    {}'.format(tb[3])
+            response['traceback'] = traceback_
+            self.send_response(ERROR)
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode(encoding='utf-8', errors='ignore'))
 
-            self.wfile.write(msg.encode())
+    def do_POST(self):
+        """Handle a POST request."""
+        if self.path == SHUTDOWN:
+            self.server.shutdown_handler()
+            threading.Thread(target=self.server.shutdown).start()
+        else:  # the pickle info
+            match = re.match(r'protocol=(\d+)&path=(.*)', self.path)
+            if match:
+                self.server.pickle_protocol = int(match.group(1))
+                self.server.pickle_path = match.group(2)
+                code = OK
+            else:
+                code = ERROR
+            self.send_response(code)
+            self.end_headers()
 
     def log_message(self, fmt, *args):
         """
         Overrides: :meth:`~http.server.BaseHTTPRequestHandler.log_message`
 
-        Ignore all log messages from being displayed in :obj:`sys.stdout`.
+        Ignore all log messages from being displayed in :data:`sys.stdout`.
         """
         pass

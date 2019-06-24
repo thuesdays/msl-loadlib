@@ -8,29 +8,38 @@ import ctypes.util
 import logging
 import subprocess
 
-from msl.loadlib import utils
-from msl.loadlib import DEFAULT_EXTENSION
+from . import utils, DEFAULT_EXTENSION, IS_PYTHON2
 
 logger = logging.getLogger(__name__)
+
+_encoding = sys.getfilesystemencoding()
 
 
 class LoadLibrary(object):
 
-    def __init__(self, path, libtype='cdll'):
+    def __init__(self, path, libtype=None, **kwargs):
         """Load a shared library.
 
-        For example, a C/C++, FORTRAN, CLR, Java, Delphi, LabVIEW, ... library.
+        For example, a C/C++, FORTRAN, C#, Java, Delphi, LabVIEW, ActiveX, ... library.
 
-        Based on the value of `libtype` or the file extension this class will load the
-        shared library as a:
+        Based on the value of `libtype` this class will load the shared library as a:
 
             * :class:`~ctypes.CDLL` if `libtype` is ``'cdll'``,
             * :class:`~ctypes.WinDLL` if `libtype` is ``'windll'``,
             * :class:`~ctypes.OleDLL` if `libtype` is ``'oledll'``,
-            * `System.Reflection.Assembly <Assembly_>`_ if `libtype` is ``'net'``, or a
-            * :class:`~.py4j.java_gateway.JavaGateway` if `libtype` is ``'java'``.
+            * `System.Reflection.Assembly <Assembly_>`_ if `libtype` is ``'net'`` or ``'clr'`` ,
+            * :class:`~.py4j.java_gateway.JavaGateway` if `libtype` is ``'java'``, or
+            * comtypes.CreateObject_ if `libtype` is ``'com'``.
+
+        .. versionchanged:: 0.4
+           Added support for Java archives
+
+        .. versionchanged:: 0.5
+           Added support for COM_ libraries
 
         .. _Assembly: https://msdn.microsoft.com/en-us/library/system.reflection.assembly(v=vs.110).aspx
+        .. _comtypes.CreateObject: https://pythonhosted.org/comtypes/#creating-and-accessing-com-objects
+        .. _COM: https://en.wikipedia.org/wiki/Component_Object_Model
 
         Parameters
         ----------
@@ -41,24 +50,33 @@ class LoadLibrary(object):
 
                 1. assume that a full or a relative (to the current working directory)
                    path is specified,
-                2. use :obj:`ctypes.util.find_library` to find the shared library file,
-                3. search :obj:`sys.path`, then
-                4. search :obj:`os.environ['PATH'] <os.environ>` to find the shared library.
+                2. use :func:`ctypes.util.find_library` to find the shared library file,
+                3. search :data:`sys.path`, then
+                4. search :data:`os.environ['PATH'] <os.environ>` to find the shared library.
+
+            If loading a COM_ library then `path` represents the `progid <comtypes.CreateObject_>`_
+            argument.
 
         libtype : :class:`str`, optional
             The library type. The following values are currently supported:
 
             * ``'cdll'`` -- for a library that uses the __cdecl calling convention
             * ``'windll'`` or ``'oledll'`` -- for a __stdcall calling convention
-            * ``'net'`` -- for Microsoft's .NET Framework (Common Language Runtime)
+            * ``'net'`` or ``'clr'`` -- for Microsoft's .NET Framework (Common Language Runtime)
             * ``'java'`` -- for a Java archive, ``.jar``, or Java byte code, ``.class``, file
+            * ``'com'`` -- for a COM_ library.
 
             Default is ``'cdll'``.
 
-            .. note::
+            .. tip::
                Since the ``.jar`` or ``.class`` extension uniquely defines a Java library,
-               the `libtype` will automatically be set to ``'java'`` if `path` ends with
-               ``.jar`` or ``.class``.
+               the `libtype` will be automatically set to ``'java'`` if `path` ends with
+               ``.jar`` or ``.class``. If `path` starts with ``'{'`` and ends with ``'}'``
+               then this uniquely defines the Class ID for a COM_ library and so `libtype`
+               will be automatically set to ``'com'``.
+
+        **kwargs
+            Keyword arguments that are passed to the object that loads the library.
 
         Raises
         ------
@@ -67,7 +85,6 @@ class LoadLibrary(object):
         TypeError
             If `libtype` is not a supported library type.
         """
-
         # a reference to the shared library
         self._lib = None
 
@@ -77,8 +94,23 @@ class LoadLibrary(object):
         # a reference to the Py4J JavaGateway
         self._gateway = None
 
+        if not path:
+            raise ValueError('You must specify the path, got {!r}'.format(path))
+
         # fixes Issue #8, if `path` is a <class 'pathlib.Path'> object
-        path = str(path)
+        if hasattr(path, 'as_posix'):
+            path = path.as_posix()
+
+        # try to automatically determine the libtype
+        if libtype is None:
+            if path.startswith('{') and path.endswith('}'):
+                libtype = 'com'
+            elif path.endswith('.jar') or path.endswith('.class'):
+                libtype = 'java'
+            else:
+                libtype = 'cdll'
+        else:
+            libtype = libtype.lower()
 
         # create a new reference to `path` just in case the
         # DEFAULT_EXTENSION is appended below so that the
@@ -87,38 +119,45 @@ class LoadLibrary(object):
         _path = path
 
         # assume a default extension if no extension was provided
-        ext = os.path.splitext(_path)[1]
-        if not ext:
+        ext = os.path.splitext(path)[1]
+        if libtype != 'java' and libtype != 'com' and not ext:
             _path += DEFAULT_EXTENSION
 
-        # the .jar or .class extension uniquely defines a Java library
-        if ext in ('.jar', '.class'):
-            libtype = 'java'
+        if IS_PYTHON2:
+            _path = _path.encode(_encoding)
 
-        self._path = os.path.abspath(_path)
-        if not os.path.isfile(self._path):
-            # for find_library use the original 'path' value since it may be a library name
-            # without any prefix like 'lib', suffix like '.so', '.dylib' or version number
-            self._path = ctypes.util.find_library(path)
-            if self._path is None:  # then search sys.path and os.environ['PATH']
-                success = False
-                search_dirs = sys.path + os.environ['PATH'].split(os.pathsep)
-                for directory in search_dirs:
-                    p = os.path.join(directory, _path)
-                    if os.path.isfile(p):
-                        self._path = p
-                        success = True
-                        break
-                if not success:
-                    raise IOError('Cannot find the shared library "{}"'.format(path))
+        if libtype != 'com':
+            self._path = os.path.abspath(_path)
+            if not os.path.isfile(self._path):
+                # for find_library use the original 'path' value since it may be a library name
+                # without any prefix like 'lib', suffix like '.so', '.dylib' or version number
+                self._path = ctypes.util.find_library(path)
+                if self._path is None:  # then search sys.path and os.environ['PATH']
+                    success = False
+                    search_dirs = sys.path + os.environ['PATH'].split(os.pathsep)
+                    for directory in search_dirs:
+                        p = os.path.join(directory, _path)
+                        if os.path.isfile(p):
+                            self._path = p
+                            success = True
+                            break
+                    if not success:
+                        raise IOError('Cannot find the shared library {!r}'.format(path))
+        else:
+            self._path = _path
 
-        libtype = libtype.lower()
         if libtype == 'cdll':
-            self._lib = ctypes.CDLL(self._path)
+            self._lib = ctypes.CDLL(self._path, **kwargs)
         elif libtype == 'windll':
-            self._lib = ctypes.WinDLL(self._path)
+            self._lib = ctypes.WinDLL(self._path, **kwargs)
         elif libtype == 'oledll':
-            self._lib = ctypes.OleDLL(self._path)
+            self._lib = ctypes.OleDLL(self._path, **kwargs)
+        elif libtype == 'com':
+            if not utils.is_comtypes_installed():
+                raise IOError('Cannot load a COM library because comtypes is not installed.\n'
+                              'To install comtypes run: pip install comtypes')
+            from comtypes.client import CreateObject
+            self._lib = CreateObject(self._path, **kwargs)
         elif libtype == 'java':
             if not utils.is_py4j_installed():
                 raise IOError('Cannot load a Java file because Py4J is not installed.\n'
@@ -128,8 +167,8 @@ class LoadLibrary(object):
             from py4j.java_gateway import JavaGateway, GatewayParameters
 
             # the address and port to use to host the py4j.GatewayServer
-            address = '127.0.0.1'
-            port = utils.get_available_port()
+            address = kwargs.pop('address', '127.0.0.1')
+            port = kwargs.pop('port', utils.get_available_port())
 
             # find the py4j JAR (needed to import py4j.GatewayServer on the Java side)
             root = os.path.dirname(sys.executable)
@@ -160,8 +199,8 @@ class LoadLibrary(object):
                 # start the py4j.GatewayServer, cannot use subprocess.call() because it blocks
                 subprocess.Popen(cmd, stderr=sys.stderr, stdout=sys.stdout)
                 err = None
-            except IOError:
-                err = 'You must have a Java Runtime Environment installed and available on PATH'
+            except IOError as e:
+                err = str(e) + '\nYou must have a Java Runtime Environment installed and available on PATH'
 
             if err:
                 raise IOError(err)
@@ -169,12 +208,12 @@ class LoadLibrary(object):
             utils.wait_for_server(address, port, 5.0)
 
             self._gateway = JavaGateway(
-                gateway_parameters=GatewayParameters(address=address, port=port)
+                gateway_parameters=GatewayParameters(address=address, port=port, **kwargs)
             )
 
             self._lib = self._gateway.jvm
 
-        elif libtype == 'net':
+        elif libtype == 'net' or libtype == 'clr':
             if not utils.is_pythonnet_installed():
                 raise IOError('Cannot load a .NET Assembly because pythonnet is not installed.\n'
                               'To install pythonnet run: pip install pythonnet')
@@ -212,33 +251,47 @@ class LoadLibrary(object):
 
             # the shared library must be available in sys.path
             head, tail = os.path.split(self._path)
+            if IS_PYTHON2:
+                head = head.decode(_encoding)
             sys.path.append(head)
 
             # don't include the library extension
             clr.AddReference(os.path.splitext(tail)[0])
 
             # import namespaces, create instances of classes or reference a System.Type[] object
-            dotnet = dict()
-            for t in self._assembly.GetTypes():
-                if t.Namespace is not None:
-                    mod = __import__(t.Namespace)
-                    if mod.__name__ not in dotnet:
-                        dotnet[mod.__name__] = mod
-                else:
-                    try:
-                        dotnet[t.Name] = self._assembly.CreateInstance(t.FullName)
-                    except:
-                        if t.Name not in dotnet:
-                            dotnet[t.Name] = t
-            self._lib = DotNet(dotnet, self._path)
+            try:
+                types = self._assembly.GetTypes()
+            except Exception as e:
+                logger.error(e)
+                logger.error('The LoaderExceptions are:')
+                for item in e.LoaderExceptions:
+                    logger.error('  ' + item.Message)
+            else:
+                dotnet = dict()
+                for t in types:
+                    if t.Namespace is not None:
+                        mod = __import__(t.Namespace)
+                        if mod.__name__ not in dotnet:
+                            dotnet[mod.__name__] = mod
+                    else:
+                        try:
+                            dotnet[t.Name] = self._assembly.CreateInstance(t.FullName)
+                        except:
+                            if t.Name not in dotnet:
+                                dotnet[t.Name] = t
+                self._lib = DotNet(dotnet, self._path)
 
         else:
             raise TypeError('Cannot load libtype={}'.format(libtype))
+
+        if IS_PYTHON2:
+            self._path = self._path.decode(_encoding)
+
         logger.debug('Loaded ' + self._path)
 
     def __repr__(self):
-        return '<{} id={:#x} libtype={} path={}>'.format(
-            self.__class__.__name__, id(self), self._lib.__class__.__name__, self._path)
+        path = self._path.encode(_encoding) if IS_PYTHON2 else self._path
+        return '<LoadLibrary libtype={} path={}>'.format(self._lib.__class__.__name__, path)
 
     def __del__(self):
         if self._gateway is not None:
@@ -248,14 +301,13 @@ class LoadLibrary(object):
     @property
     def assembly(self):
         """
-        Returns a reference to the `.NET Runtime Assembly <NET_>`_ object, *only if
-        the shared library is a .NET Framework*, otherwise returns :obj:`None`.
+        Returns a reference to the `.NET Runtime Assembly <Assembly_>`_ object, only if
+        the shared library is a .NET Framework, otherwise returns :data:`None`.
 
         .. tip::
            The `JetBrains dotPeek`_ program can be used to reliably decompile any
            .NET Assembly in to the equivalent source code.
 
-        .. _NET: https://msdn.microsoft.com/en-us/library/system.reflection.assembly(v=vs.110).aspx
         .. _JetBrains dotPeek: https://www.jetbrains.com/decompiler/
         """
         return self._assembly
@@ -263,8 +315,8 @@ class LoadLibrary(object):
     @property
     def gateway(self):
         """
-        Returns the :class:`~py4j.java_gateway.JavaGateway` object, *only if
-        the shared library is a Java archive*, otherwise returns :obj:`None`.
+        Returns the :class:`~py4j.java_gateway.JavaGateway` object, only if
+        the shared library is a Java archive, otherwise returns :data:`None`.
         """
         return self._gateway
 
@@ -277,8 +329,9 @@ class LoadLibrary(object):
             * ``'cdll'`` then a :class:`~ctypes.CDLL` object
             * ``'windll'`` then a :class:`~ctypes.WinDLL` object
             * ``'oledll'`` then a :class:`~ctypes.OleDLL` object
-            * ``'net'`` then a :class:`~.load_library.DotNet` object
+            * ``'net'`` or ``'clr'`` then a :class:`~.load_library.DotNet` object
             * ``'java'`` then a :class:`~py4j.java_gateway.JVMView` object
+            * ``'com'`` then the interface pointer returned by comtypes.CreateObject_
         """
         return self._lib
 
@@ -293,7 +346,7 @@ class DotNet(object):
     def __init__(self, dot_net_dict, path):
         """Contains the namespace_ modules, classes and `System.Type`_ objects of a .NET Assembly.
 
-        Do not instantiate directly.
+        Do not instantiate this class directly.
 
         .. _namespace: https://msdn.microsoft.com/en-us/library/z2kcy19k.aspx
         .. _System.Type: https://msdn.microsoft.com/en-us/library/system.type(v=vs.110).aspx
@@ -302,5 +355,4 @@ class DotNet(object):
         self._path = path
 
     def __repr__(self):
-        return '<{} id={:#x} path={}>'.format(
-            self.__class__.__name__, id(self), self._path)
+        return '<{} path={}>'.format(self.__class__.__name__, self._path)

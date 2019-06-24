@@ -3,7 +3,7 @@ Communicates with :ref:`labview_lib32 <labview-lib>` via the :class:`~.labview32
 
 .. attention::
    This example requires that the appropriate
-   `LabVIEW Run-Time Engine <http://www.ni.com/download/labview-run-time-engine-2015/5507/en/>`_ is installed
+   `LabVIEW Run-Time Engine <https://www.ni.com/download/labview-run-time-engine-2015/5507/en/>`_ is installed
    and that the operating system is Windows.
 
 Example of a module that can be executed within a 64-bit Python interpreter which can
@@ -12,7 +12,7 @@ by a 32-bit Python server, :mod:`.labview32`. A 64-bit process cannot load a
 32-bit library and therefore `inter-process communication <ipc_>`_ is used to
 interact with a 32-bit library from a 64-bit process.
 
-:class:`~.labview64.Labview64` is the 64-bit client and :class:`~.labview.Labview32`
+:class:`~.labview64.Labview64` is the 64-bit client and :class:`~.labview32.Labview32`
 is the 32-bit server for `inter-process communication <ipc_>`_.
 
 .. _ipc: https://en.wikipedia.org/wiki/Inter-process_communication
@@ -31,7 +31,7 @@ class Labview64(Client64):
     def __init__(self):
         # specify the name of the corresponding 32-bit server module, labview32, which hosts
         # the 32-bit LabVIEW library -- labview_lib32.dll
-        Client64.__init__(self, module32='labview32', append_sys_path=os.path.dirname(__file__))
+        super(Labview64, self).__init__(module32='labview32', append_sys_path=os.path.dirname(__file__))
 
     def stdev(self, x, weighting=0):
         """Calculates the mean, variance and standard deviation of the values in the input `x`.

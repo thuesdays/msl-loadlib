@@ -1,6 +1,8 @@
 import os
 import sys
 
+import sphinx
+
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
@@ -27,11 +29,20 @@ extensions = [
     'sphinx.ext.todo',
 ]
 
-# 'alphabetical', 'bysource', 'groupwise'
-autodoc_member_order = 'bysource'
+# autodoc options
+if sphinx.version_info < (1, 8):
+    # 'alphabetical', 'bysource', 'groupwise'
+    autodoc_member_order = 'bysource'
 
-# 'members', 'undoc-members', 'private-members', 'special-members', 'inherited-members', 'show-inheritance'
-autodoc_default_flags = ['members', 'undoc-members', 'show-inheritance']
+    # 'members', 'undoc-members', 'private-members', 'special-members', 'inherited-members', 'show-inheritance'
+    autodoc_default_flags = ['members', 'undoc-members', 'show-inheritance']
+else:
+    autodoc_default_options = {
+        'members': None,
+        'member-order': 'bysource',
+        'undoc-members': None,
+        'show-inheritance': None,
+    }
 
 # Generate autodoc stubs with summaries from code
 autosummary_generate = True
@@ -195,9 +206,17 @@ epub_copyright = copyright
 # A list of files that should not be packed into the epub file.
 epub_exclude_files = ['search.html']
 
-
 # Example configuration for intersphinx: refer to the Python standard library.
 intersphinx_mapping = {
-    'python': ('https://docs.python.org/{}'.format(sys.version_info.major), None),
+    'python': ('https://docs.python.org/3', None),
     'py4j': ('https://www.py4j.org/', None),
+    'numpy': ('https://docs.scipy.org/doc/numpy/', None),
 }
+
+# warn about all broken links
+nitpicky = True
+
+# known bad links
+nitpick_ignore = [
+    ('py:class', '_ctypes.Structure'),
+]

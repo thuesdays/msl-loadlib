@@ -1,22 +1,30 @@
 """
-Creates a `frozen <http://www.pyinstaller.org/>`_ 32-bit server to use for
+Creates a 32-bit server to use for
 `inter-process communication <https://en.wikipedia.org/wiki/Inter-process_communication>`_.
 
-This module creates a 32-bit executable. The executable starts a 32-bit server to
-host a 32-bit library. A client module running within a 64-bit Python interpreter
-can communicate with the 32-bit library by sending requests to the server. The server
-calls the library to execute the request and then the server sends a response back
-to the client.
+This module must be run from a 32-bit Python interpreter with PyInstaller_ installed.
 
-This module must be run from a 32-bit Python interpreter with both
-`PyInstaller <http://www.pyinstaller.org/>`_ (to create the executable) and
-`Python for .NET <https://pypi.python.org/pypi/pythonnet/>`_ (to be able to load .NET
-Framework assemblies) installed.
+If you want to re-freeze the 32-bit server, for example, if you want a 32-bit version of
+:mod:`numpy` to be available on the server, then run the following with a 32-bit Python
+interpreter that has the packages that you want to be available on the server installed
+
+.. code-block:: pycon
+
+   >>> from msl.loadlib import freeze_server32
+   >>> freeze_server32.main()  # doctest: +SKIP
+
+.. _PyInstaller: https://www.pyinstaller.org/
+.. _Python for .NET: https://pypi.python.org/pypi/pythonnet/
+.. _comtypes: https://pythonhosted.org/comtypes/#
 """
 import os
 import sys
 import shutil
 import subprocess
+try:
+    from urllib import urlopen  # Python 2
+except ImportError:
+    from urllib.request import urlopen
 
 try:
     from msl import loadlib
@@ -24,52 +32,68 @@ except ImportError:
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
     from msl import loadlib
 
-if loadlib.IS_PYTHON2:
-    from urllib import urlopen
-elif loadlib.IS_PYTHON3:
-    from urllib.request import urlopen
-else:
-    raise NotImplementedError('Python major version is not 2 or 3')
 
+def main(spec=None, requires_pythonnet=True, requires_comtypes=True):
+    """Creates a 32-bit Python server.
 
-def main(spec=None):
-    """Creates a `frozen <PyInstaller_>`_ 32-bit Python server.
-
-    Uses PyInstaller_ to create a `frozen <PyInstaller_>`_ 32-bit Python executable.
-    This executable starts a server, :class:`~.server32.Server32`, which hosts a Python
+    Uses PyInstaller_ to create a frozen 32-bit Python executable. This executable
+    starts a 32-bit server, :class:`~.server32.Server32`, which hosts a Python
     module that can load a 32-bit library.
 
-    .. _PyInstaller: http://www.pyinstaller.org/
-    
+    .. versionchanged:: 0.5
+       Added the `requires_pythonnet` and `requires_comtypes` arguments.
+
     Parameters
     ----------
     spec : :class:`str`, optional
-        If you want to freeze using a PyInstaller_ .spec file then you can specify the 
-        path to the .spec file. Default is :obj:`None`.    
+        If you want to freeze using a PyInstaller_ .spec file then you can specify the
+        path to the .spec file.
+    requires_pythonnet : :class:`bool`, optional
+        Whether `Python for .NET`_ must be available on the 32-bit server.
+    requires_comtypes : :class:`bool`, optional
+        Whether comtypes_ must be available on the 32-bit server. If you using a
+        non-Windows operating system then this argument is ignored.
     """
     if loadlib.IS_PYTHON_64BIT:
         print('Must run {} using a 32-bit Python interpreter'.format(os.path.basename(__file__)))
-        sys.exit(0)
+        return
 
+    missing_packages = []
     try:
         import PyInstaller
     except ImportError:
-        print('PyInstaller not found, run:')
-        print('$ pip install pyinstaller')
-        sys.exit(0)
+        missing_packages.append('pyinstaller')
 
-    try:
-        import clr
-    except ImportError:
-        print('pythonnet not found, run:')
-        print('$ pip install pythonnet')
-        sys.exit(0)
+    if requires_pythonnet:
+        try:
+            import clr
+        except ImportError:
+            missing_packages.append('pythonnet')
+
+    if loadlib.IS_WINDOWS and requires_comtypes:
+        try:
+            import comtypes
+        except ImportError:
+            missing_packages.append('comtypes')
+        except OSError:
+            # OSError: [WinError -2147417850] Cannot change thread mode after it is set
+            # don't care about this error since comtypes is indeed installed
+            pass
+
+    if missing_packages:
+        print('Packages are missing to be able to create the 32-bit server, run:')
+        print('pip install ' + ' '.join(missing_packages))
+        return
 
     # start the freezing process
 
     here = os.path.abspath(os.path.dirname(__file__))
     cmd = [
-        'pyinstaller',
+        # Specifically invoke pyinstaller in the context of the current
+        # python interpreter. This fixes the issue where the blind `pyinstaller`
+        # invocation points to a 64-bit version.
+        sys.executable,
+        '-m', 'PyInstaller',
         '--distpath', here,
         '--noconfirm',
     ]
@@ -77,7 +101,7 @@ def main(spec=None):
     if spec is None:
         spec_file = '{}.spec'.format(loadlib.SERVER_FILENAME)
         if os.path.exists(spec_file):
-            yn = input('A {0} file exists. You may want to run "python freeze_server32.py {0}"\n'
+            yn = input('A {0} file exists. You may want to run "python freeze_server32.py --spec {0}"\n'
                        'Do you want to continue and overwrite the spec file (y/[n]):'.format(spec_file))
             if yn.lower() not in ('y', 'yes'):
                 print('Aborted.')
@@ -86,13 +110,17 @@ def main(spec=None):
             '--name', loadlib.SERVER_FILENAME,
             '--onefile',
             '--clean',
-            '--hidden-import', 'clr',
+            '--hidden-import', 'msl.examples.loadlib',
         ])
+        if requires_pythonnet:
+            cmd.extend(['--hidden-import', 'clr'])
+        if loadlib.IS_WINDOWS and requires_comtypes:
+            cmd.extend(['--hidden-import', 'comtypes'])
         cmd.extend(_get_standard_modules())
         cmd.append(os.path.join(here, 'start_server32.py'))
     else:
         cmd.append(spec)
-    subprocess.call(cmd)
+    subprocess.check_call(cmd)
 
     # the --version-file option for pyinstaller does not currently work on Windows, this is a fix
     verpatch = os.path.join(here, 'verpatch.exe')
@@ -104,7 +132,7 @@ def main(spec=None):
                '/s', 'description', 'Access a 32-bit library from 64-bit Python',
                '/s', 'product', 'Python 32-bit server',
                '/s', 'copyright', loadlib.__copyright__]
-        subprocess.call(ver)
+        subprocess.check_call(ver)
 
     # cleanup
     shutil.rmtree('./build/' + loadlib.SERVER_FILENAME)
@@ -117,6 +145,8 @@ def main(spec=None):
 
     # create the .NET Framework config file
     loadlib.utils.check_dot_net_config(os.path.join(here, loadlib.SERVER_FILENAME))
+
+    print('Server saved to: ' + os.path.join(here, loadlib.SERVER_FILENAME))
 
 
 def _get_standard_modules():
@@ -185,10 +215,32 @@ def _get_standard_modules():
 
 
 if __name__ == '__main__':
-    spec = None
-    if len(sys.argv) > 1:
-        if sys.argv[1].endswith('.spec'):
-            spec = sys.argv[1]
-        else:
-            raise IOError('Must pass in a PyInstaller .spec file')
-    main(spec)
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Create the frozen 32-bit server.')
+    parser.add_argument(
+        '-s', '--spec',
+        help='the PyInstaller spec file to use'
+    )
+    parser.add_argument(
+        '--ignore-pythonnet',
+        action='store_true',
+        default=False,
+        help='ignore the error that pythonnet is not installed'
+    )
+    parser.add_argument(
+        '--ignore-comtypes',
+        action='store_true',
+        default=False,
+        help='ignore the error that comtypes is not installed'
+    )
+
+    args = parser.parse_args(sys.argv[1:])
+
+    sys.exit(
+        main(
+            spec=args.spec,
+            requires_pythonnet=not args.ignore_pythonnet,
+            requires_comtypes=not args.ignore_comtypes
+        )
+    )

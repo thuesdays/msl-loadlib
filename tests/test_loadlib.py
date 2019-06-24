@@ -1,17 +1,24 @@
+# -*- coding: utf-8 -*-
 import os
+import sys
+import math
 import pathlib
 
 import clr
 import pytest
 
 from msl import loadlib
-from msl.examples.loadlib import Cpp64, Fortran64, Dummy64, DotNet64, EXAMPLES_DIR
+from msl.examples.loadlib import Cpp64, Fortran64, Echo64, DotNet64, EXAMPLES_DIR, FourPoints
 
-eps = 1e-10
+# fixes -> OSError: [WinError -2147417850] Cannot change thread mode after it is set
+# when importing comtypes
+sys.coinit_flags = 0
+
+eps = 1e-9
 
 c = Cpp64()
 f = Fortran64()
-d = Dummy64(True)
+d = Echo64(True)
 n = DotNet64()
 
 
@@ -94,6 +101,17 @@ def test_cpp():
 
     assert '0987654321' == c.reverse_string_v1('1234567890')
     assert '[abc x|z j 1 *&' == c.reverse_string_v2('&* 1 j z|x cba[')
+
+    if loadlib.IS_PYTHON3:
+        # can't pickle.dump a ctypes.Structure in Python 2 and then
+        # pickle.load it in Python 3 (the interpreter that Server32 is running on)
+        fp = FourPoints((0, 0), (0, 1), (1, 1), (1, 0))
+        assert c.distance_4_points(fp) == 4.0
+
+    assert c.circumference(0.5, 0) == 0.0
+    assert c.circumference(0.5, 2) == 2.0
+    assert c.circumference(0.5, 2**16) == pytest.approx(math.pi)
+    assert c.circumference(1.0, 2**16) == pytest.approx(2.0*math.pi)
 
 
 def test_fortran():
@@ -197,6 +215,8 @@ def test_namespace_with_dots():
     net = loadlib.LoadLibrary('./tests/namespace_with_dots/Namespace.With.Dots.dll', 'net')
     checker = net.lib.Namespace.With.Dots.Checker()
     assert checker.IsSuccess()
+    repr(net)  # test that the __repr__ and __str__ methods work for a non-unicode path
+    str(net)
 
 
 # def test_labview():
@@ -334,3 +354,103 @@ def test_java():
     assert abs(Trig.atan2(-4.321, x) - math.atan2(-4.321, x)) < eps
 
     cls.gateway.shutdown()
+
+
+def test_unicode_path():
+    cls = loadlib.LoadLibrary(u'./tests/uñicödé/Trig.class')
+    import math
+    x = 0.123456
+    assert abs(cls.lib.Trig.cos(x) - math.cos(x)) < eps
+    repr(cls)
+    str(cls)
+    cls.gateway.shutdown()
+
+    net = loadlib.LoadLibrary(u'./tests/uñicödé/Namespace.With.Dots-uñicödé.dll', 'net')
+    checker = net.lib.Namespace.With.Dots.Checker()
+    assert checker.IsSuccess()
+    repr(net)
+    str(net)
+
+    # IMPORTANT: keep the C++ test after loading the unicode version of the .NET DLL
+    # because it tests for additional problems that can occur.
+    # When the unicode version of .NET is loaded the `head` gets appended to sys.path, i.e.,
+    #   # the shared library must be available in sys.path
+    #   head, tail = os.path.split(self._path)
+    #   if IS_PYTHON2:
+    #       head = head.decode(_encoding)  <- this is important
+    #   sys.path.append(head)
+    # Without doing head.decode(_encoding) then when loading the unicode version of the C++ DLL
+    # the following error occurred:
+    #   UnicodeDecodeError: 'ascii' codec can't decode byte 0xf1 in position 29: ordinal not in range(128)
+    # This happens because when doing the search for the unicode version of the C++ DLL in Python 2.7, i.e.,
+    #   search_dirs = sys.path + os.environ['PATH'].split(os.pathsep)
+    #   for directory in search_dirs:
+    #       p = os.path.join(directory, _path)  <- raised UnicodeDecodeError
+    # the `directory` equaled the encoded version of `head` and so it raised UnicodeDecodeError
+    sys.path.append(u'./tests/uñicödé')
+    bit = u'64' if loadlib.IS_PYTHON_64BIT else u'32'
+    cpp = loadlib.LoadLibrary(u'cpp_lib' + bit + u'-uñicödé')
+    assert cpp.lib.add(1, 2) == 3
+    repr(cpp)
+    str(cpp)
+
+    class Cpp64Encoding(loadlib.Client64):
+        def __init__(self):
+            super(Cpp64Encoding, self).__init__(
+                module32='cpp32unicode',
+                append_sys_path=os.path.dirname(__file__) + u'/uñicödé',
+                append_environ_path=os.path.dirname(__file__) + u'/uñicödé',
+            )
+
+        def add(self, a, b):
+            return self.request32('add', a, b)
+
+    c2 = Cpp64Encoding()
+    assert c2.add(-5, 3) == -2
+
+    with pytest.raises(loadlib.Server32Error):
+        c2.add('hello', 'world')
+
+    try:
+        c2.add('hello', 'world')
+    except loadlib.Server32Error as e:
+        print(e)
+
+    c2.shutdown_server32()
+
+
+def test_Server32Error():
+    try:
+        c.add('hello', 'world')
+    except loadlib.Server32Error as e:
+        assert e.name == 'TypeError'
+        assert e.value.startswith('an integer is required')
+        assert e.traceback.endswith('return self.lib.add(ctypes.c_int32(a), ctypes.c_int32(b))')
+
+
+@pytest.mark.skipif(not loadlib.IS_WINDOWS, reason='comtypes only runs on Windows')
+def test_comtypes():
+    obj = loadlib.LoadLibrary('Scripting.FileSystemObject', 'com')
+    assert hasattr(obj.lib, 'CreateTextFile')
+    obj = None
+
+    with pytest.raises(OSError):
+        loadlib.LoadLibrary('ABC.def.GHI', 'com')
+
+    info = loadlib.utils.get_com_info()
+    for key, value in info.items():
+        if value['ProgID'] == 'Scripting.FileSystemObject':
+            # don't need to specify libtype='com' since the `path`
+            # argument startswith "{" and endswith "}"
+            obj = loadlib.LoadLibrary(key)
+            assert hasattr(obj.lib, 'CreateTextFile')
+            obj = None
+            break
+
+
+def test_raises_ValueError():
+    with pytest.raises(ValueError):
+        loadlib.LoadLibrary(None)
+
+    with pytest.raises(ValueError):
+        loadlib.LoadLibrary('')

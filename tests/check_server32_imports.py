@@ -6,6 +6,8 @@
 #   Module does not contain a class that is a subclass of Server32
 #   Cannot start 32-bit server.
 
+
+# modules in Python 3.7.3
 modules = [
     '__future__',
     '__main__',
@@ -41,9 +43,11 @@ modules = [
     'collections.abc',
     'colorsys',
     'compileall',
+    'concurrent',
     'concurrent.futures',
     'configparser',
     'contextlib',
+    'contextvars',
     'copy',
     'copyreg',
     'cProfile',
@@ -54,6 +58,7 @@ modules = [
     'curses.ascii',
     'curses.panel',
     'curses.textpad',
+    'dataclasses',
     'datetime',
     'dbm',
     'dbm.dumb',
@@ -124,6 +129,7 @@ modules = [
     'email.parser',
     'email.policy',
     'email.utils',
+    'encodings',
     'encodings.idna',
     'encodings.mbcs',
     'encodings.utf_8_sig',
@@ -136,7 +142,6 @@ modules = [
     'fileinput',
     'fnmatch',
     'formatter',
-    'fpectl',
     'fractions',
     'ftplib',
     'functools',
@@ -164,6 +169,7 @@ modules = [
     'importlib',
     'importlib.abc',
     'importlib.machinery',
+    'importlib.resources',
     'importlib.util',
     'inspect',
     'io',
@@ -268,6 +274,7 @@ modules = [
     'termios',
     'test',
     'test.support',
+    'test.support.script_helper',
     'textwrap',
     'threading',
     'time',
@@ -323,6 +330,7 @@ modules = [
     'xml.sax.handler',
     'xml.sax.saxutils',
     'xml.sax.xmlreader',
+    'xmlrpc',
     'xmlrpc.client',
     'xmlrpc.server',
     'zipapp',
@@ -335,11 +343,18 @@ print('The following modules cannot be imported')
 
 # these are mandatory!
 from msl import loadlib
+from msl.examples.loadlib import EXAMPLES_DIR
 import clr
+
+if loadlib.IS_WINDOWS:
+    import sys
+    # fixes -> OSError: [WinError -2147417850] Cannot change thread mode after it is set
+    sys.coinit_flags = 0
+    import comtypes
 
 for m in modules:
     try:
         __import__(m)
     except ImportError:
-        print(m)
+        print('  ' + m)
 print('')
