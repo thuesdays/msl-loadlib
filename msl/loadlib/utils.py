@@ -218,7 +218,7 @@ def check_dot_net_config(py_exe_path):
         return 1, msg
 
 
-def port_in_use(port):
+def port_in_use(port, timeout):
     """Uses netstat_ to determine if the network port is in use.
 
     .. _netstat: https://www.computerhope.com/unix/unetstat.htm
@@ -230,13 +230,14 @@ def port_in_use(port):
 
     Returns
     -------
+    :param float timeout: timeout for handle deadlock in Popen.communicate;
     :class:`bool`
         Whether the port is in use.
     """
     p = subprocess.Popen(['netstat', '-an'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     # include errors='ignore' for when the header of netstat returns characters that
     # raise UnicodeDecodeError -- see PR #9
-    return p.communicate()[0].decode(errors='ignore').find(':{} '.format(port)) > 0
+    return p.communicate(timeout=timeout)[0].decode(errors='ignore').find(':{} '.format(port)) > 0
 
 
 def get_available_port():
@@ -269,7 +270,7 @@ def wait_for_server(host, port, timeout):
     # wait for the server to be running -- essentially this is the subprocess.wait() method
     stop = time.time() + max(0.0, timeout)
     while True:
-        if port_in_use(port):
+        if port_in_use(port, timeout):
             break
         if time.time() > stop:
             m = 'Timeout after {:.1f} seconds. Could not connect to {}:{}'.format(timeout, host, port)

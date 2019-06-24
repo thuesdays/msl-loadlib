@@ -12,7 +12,7 @@ def test_timeout():
 
 
 def test_port_functions():
-    assert not utils.port_in_use(utils.get_available_port())
+    assert not utils.port_in_use(utils.get_available_port(), 20)
 
 
 def test_pythonnet_py4j_comtypes_installed():
